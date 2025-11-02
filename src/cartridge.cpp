@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <string>
 #include "apu.hpp"
 #include "cpu.hpp"
 #include "mappers/mapper0.hpp"
@@ -6,6 +7,12 @@
 #include "mappers/mapper2.hpp"
 #include "mappers/mapper3.hpp"
 #include "mappers/mapper4.hpp"
+#include "mappers/mapper7.hpp"
+#include "mappers/mapper9.hpp"
+#include "mappers/mapper10.hpp"
+#include "mappers/mapper11.hpp"
+#include "mappers/mapper34.hpp"
+#include "mappers/mapper66.hpp"
 #include "ppu.hpp"
 #include "cartridge.hpp"
 
@@ -13,6 +20,8 @@ namespace Cartridge {
 
 
 Mapper* mapper = nullptr;  // Mapper chip.
+std::string currentRomPath;  // Path to currently loaded ROM
+u8 currentMapperId = 0;  // Current mapper ID
 
 /* PRG-ROM access */
 template <bool wr> u8 access(u16 addr, u8 v)
@@ -25,22 +34,32 @@ template u8 access<0>(u16, u8); template u8 access<1>(u16, u8);
 /* CHR-ROM/RAM access */
 template <bool wr> u8 chr_access(u16 addr, u8 v)
 {
-    if (!mapper) return 0;  // Safety: return 0 if no cartridge loaded
-    if (!wr) return mapper->chr_read(addr);
-    else     return mapper->chr_write(addr, v);
+    if (!wr) {
+        mapper->ppu_read_hook(addr);
+        return mapper->chr_read(addr);
+    }
+    else return mapper->chr_write(addr, v);
 }
 template u8 chr_access<0>(u16, u8); template u8 chr_access<1>(u16, u8);
 
 void signal_scanline(int scanline)
 {
-    (void)scanline;  // Scanline parameter will be used in mapper PRs
-    mapper->signal_scanline();
+    mapper->signal_scanline(scanline);
+}
+
+void ppu_write_hook(u16 index, u8 v)
+{
+    mapper->ppu_write_hook(index, v);
 }
 
 /* Load the ROM from a file. */
 void load(const char* fileName)
 {
     FILE* f = fopen(fileName, "rb");
+    if (!f) {
+        fprintf(stderr, "Failed to open ROM file: %s\n", fileName);
+        return;
+    }
 
     fseek(f, 0, SEEK_END);
     int size = ftell(f);
@@ -51,6 +70,7 @@ void load(const char* fileName)
     fclose(f);
 
     int mapperNum = (rom[7] & 0xF0) | (rom[6] >> 4);
+    currentMapperId = mapperNum;  // Store mapper ID
     if (loaded())
     {
         delete mapper;
@@ -63,6 +83,12 @@ void load(const char* fileName)
         case 2:  mapper = new Mapper2(rom); break;
         case 3:  mapper = new Mapper3(rom); break;
         case 4:  mapper = new Mapper4(rom); break;
+        case 7:  mapper = new Mapper7(rom); break;
+        case 9:  mapper = new Mapper9(rom); break;
+        case 10: mapper = new Mapper10(rom); break;
+        case 11: mapper = new Mapper11(rom); break;
+        case 34: mapper = new Mapper34(rom); break;
+        case 66: mapper = new Mapper66(rom); break;
         default:
             fprintf(stderr, "%s: mapper %d not supported\n", fileName, mapperNum);
             return;
@@ -71,6 +97,16 @@ void load(const char* fileName)
     PPU::reset();  // Reset PPU first so it's ready when CPU::power() ticks
     APU::reset();
     CPU::power();  // power() calls INT<RESET>() which ticks the PPU
+
+    // Store the ROM path for reset functionality
+    currentRomPath = fileName;
+}
+
+void reset()
+{
+    if (!currentRomPath.empty()) {
+        load(currentRomPath.c_str());
+    }
 }
 
 bool loaded()
@@ -78,40 +114,47 @@ bool loaded()
     return mapper != nullptr;
 }
 
-// Stub: Mapper IRQ checking - will be implemented in mapper PRs
-bool check_mapper_irq(int elapsed)
-{
-    (void)elapsed;
-    return false;  // No mapper IRQ support yet
-}
-
-// Stub: Expansion address handling - will be implemented in mapper PRs
-bool handles_expansion_addr(u16 addr)
-{
-    (void)addr;
-    return false;  // No expansion address support yet
-}
-
-// Stub: Mapper audio - will be implemented in mapper PRs
+// Run mapper expansion audio up to given cycle count
 void run_mapper_audio(int elapsed)
 {
-    (void)elapsed;
-    // No mapper audio yet
+    if (mapper && mapper->has_audio())
+        mapper->run_audio(elapsed);
 }
 
-// Stub: Mapper audio frame end - will be implemented in mapper PRs
+// End audio frame for mapper expansion audio
 void end_mapper_audio_frame(int elapsed)
 {
-    (void)elapsed;
-    // No mapper audio yet
+    if (mapper && mapper->has_audio())
+        mapper->end_audio_frame(elapsed);
 }
 
-// Stub: PPU write hook - will be implemented in mapper PRs
-void ppu_write_hook(u16 addr, u8 v)
+// Check if mapper IRQ should be active at given time
+bool check_mapper_irq(int elapsed)
 {
-    (void)addr;
-    (void)v;
-    // No PPU write observation yet
+    if (mapper)
+        return mapper->check_irq(elapsed);
+    return false;
+}
+
+std::string get_rom_path()
+{
+    return currentRomPath;
+}
+
+u8 get_mapper_id()
+{
+    return currentMapperId;
+}
+
+Mapper* get_mapper()
+{
+    return mapper;
+}
+
+bool handles_expansion_addr(u16 addr)
+{
+    if (!mapper) return false;
+    return mapper->handles_expansion_addr(addr);
 }
 
 
