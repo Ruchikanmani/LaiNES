@@ -90,5 +90,12 @@ void set_mirroring(Mirroring mode);
 void step();
 void reset();
 
+// Exposed for MMC5 (needs to know rendering phase and access nametables)
+extern u8 ciRam[0x800];  // Nametable RAM
+extern int dot;          // Current dot/cycle within scanline
+extern Ctrl ctrl;        // PPUCTRL register (for sprite size)
+extern Mask mask;        // PPUMASK register (for rendering enabled check)
+u16 nt_mirror(u16 addr); // Nametable mirroring function
+
 
 }
