@@ -15,6 +15,7 @@ const unsigned FONT_SZ = 15;
 
 void init();
 void toggle_pause();
+void set_paused(bool paused);
 SDL_Scancode query_key();
 int query_button();
 void run();
@@ -26,5 +27,9 @@ u8 get_joypad_state(int n);
 void new_frame(u32* pixels);
 void new_samples(const blip_sample_t* samples, size_t count);
 void set_size(int mul);
+void set_fullscreen(bool enabled);
+void set_scaling_mode(bool smooth);
+void set_aspect_stretch(bool enabled);
+bool is_fast_forward();
 
 }
