@@ -1,5 +1,8 @@
 #pragma once
 #include "common.hpp"
+#include <string>
+
+class Mapper;  // Forward declaration
 
 namespace Cartridge {
 
@@ -17,6 +20,11 @@ bool handles_expansion_addr(u16 addr);
 void run_mapper_audio(int elapsed);
 void end_mapper_audio_frame(int elapsed);
 void ppu_write_hook(u16 addr, u8 v);  // Mapper PPU write observer
+
+// Save state support - get ROM path, mapper ID, and mapper instance
+std::string get_rom_path();
+u8 get_mapper_id();
+Mapper* get_mapper();
 
 
 }

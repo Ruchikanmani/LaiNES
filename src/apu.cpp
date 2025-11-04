@@ -104,5 +104,10 @@ Blip_Buffer& get_buffer()
     return buf;
 }
 
+Nes_Apu& get_apu() {
+    return apu;
+}
+
 
 }
+

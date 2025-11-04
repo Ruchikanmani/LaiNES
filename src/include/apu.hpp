@@ -14,5 +14,8 @@ void init();
 bool check_irq(int elapsed);  // Check if APU IRQ should be active at given time
 Blip_Buffer& get_buffer();     // Get audio buffer for mapper expansion audio
 
+// Save state support - get APU instance
+Nes_Apu& get_apu();
+
 
 }
