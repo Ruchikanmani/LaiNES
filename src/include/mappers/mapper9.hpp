@@ -28,12 +28,12 @@ class Mapper9 : public Mapper
     u8 chr_write(u16 addr, u8 v) override;
 
     // Save state support
-    u32 get_state_size() const {
+    u32 get_state_size() const override {
         return sizeof(prg_bank) + sizeof(chr_bank_fd) + sizeof(chr_bank_fe) +
                sizeof(chr_latch) + sizeof(mirroring);
     }
 
-    void save_state(u8* buffer) const {
+    void save_state(u8* buffer) const override {
         int offset = 0;
         buffer[offset++] = prg_bank;
         memcpy(buffer + offset, chr_bank_fd, sizeof(chr_bank_fd));
@@ -45,7 +45,7 @@ class Mapper9 : public Mapper
         buffer[offset++] = mirroring;
     }
 
-    void load_state(const u8* buffer) {
+    void load_state(const u8* buffer) override {
         int offset = 0;
         prg_bank = buffer[offset++];
         memcpy(chr_bank_fd, buffer + offset, sizeof(chr_bank_fd));

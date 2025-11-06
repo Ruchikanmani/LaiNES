@@ -8,6 +8,7 @@
 #include "menu.hpp"
 #include "gui.hpp"
 #include "config.hpp"
+#include "savestate.hpp"
 
 namespace GUI {
 
@@ -169,6 +170,20 @@ void init()
     mainMenu = new Menu;
     mainMenu->add(new Entry("Load ROM", []{ menu = fileMenu; }));
     mainMenu->add(new Entry("Reset",    []{ Cartridge::reset(); toggle_pause(); }, []{ return Cartridge::loaded(); }));
+    mainMenu->add(new Entry("Save State", []{
+        std::string filename = SaveState::get_default_filename();
+        if (!filename.empty()) {
+            SaveState::save(filename.c_str());
+        }
+        toggle_pause();
+    }, []{ return Cartridge::loaded(); }));
+    mainMenu->add(new Entry("Load State", []{
+        std::string filename = SaveState::get_default_filename();
+        if (!filename.empty()) {
+            SaveState::load(filename.c_str());
+        }
+        toggle_pause();
+    }, []{ return Cartridge::loaded(); }));
     mainMenu->add(new Entry("Settings", []{ menu = settingsMenu; }));
     mainMenu->add(new Entry("Exit",     []{ exit(0); }));
 

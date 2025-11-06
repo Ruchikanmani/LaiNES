@@ -95,7 +95,29 @@ extern u8 ciRam[0x800];  // Nametable RAM
 extern int dot;          // Current dot/cycle within scanline
 extern Ctrl ctrl;        // PPUCTRL register (for sprite size)
 extern Mask mask;        // PPUMASK register (for rendering enabled check)
+extern Mirroring mirroring;  // Current mirroring mode
 u16 nt_mirror(u16 addr); // Nametable mirroring function
+
+// Exposed for save states
+extern u8 cgRam[0x20];   // Palette RAM
+extern u8 oamMem[0x100]; // OAM memory
+extern int scanline;     // Current scanline
+extern Status status;    // PPUSTATUS register
+
+// Save state support - get/set PPU internal registers
+struct PpuState {
+    u16 vram_addr;      // vAddr.r
+    u16 temp_addr;      // tAddr.r
+    u8 fine_x;          // fX
+    u8 oam_addr;        // oamAddr
+    u8 read_buffer;     // readBuffer
+    u8 open_bus;        // openBus
+    bool write_latch;   // latch
+    bool frame_odd;     // frameOdd
+};
+
+void get_state(PpuState& state);
+void set_state(const PpuState& state);
 
 
 }
