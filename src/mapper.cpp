@@ -45,17 +45,41 @@ u8 Mapper::read(u16 addr)
 
 u8 Mapper::chr_read(u16 addr)
 {
-    // Only handle pattern tables ($0000-$1FFF)
-    // Nametables are handled directly by PPU
-    return chr[chrMap[addr / 0x400] + (addr % 0x400)];
+    // Pattern tables ($0000-$1FFF)
+    if (addr < 0x2000)
+        return chr[chrMap[addr / 0x400] + (addr % 0x400)];
+
+    // Nametables ($2000-$2FFF) - use standard mirroring
+    if (addr >= 0x2000 && addr < 0x3000)
+    {
+        u16 mirrorAddr = PPU::nt_mirror(addr);
+        return PPU::ciRam[mirrorAddr];
+    }
+
+    // Mirror $3000-$3FFF to $2000-$2FFF
+    if (addr >= 0x3000 && addr < 0x4000)
+        return chr_read(addr - 0x1000);
+
+    return 0;
 }
 
 u8 Mapper::chr_write(u16 addr, u8 v)
 {
-    // Only handle pattern tables ($0000-$1FFF)
-    // Nametables are handled directly by PPU
-    if (chrRam)
+    // CHR-RAM writes ($0000-$1FFF)
+    if (addr < 0x2000 && chrRam)
         chr[chrMap[addr / 0x400] + (addr % 0x400)] = v;
+
+    // Nametable writes ($2000-$2FFF) - use standard mirroring
+    if (addr >= 0x2000 && addr < 0x3000)
+    {
+        u16 mirrorAddr = PPU::nt_mirror(addr);
+        PPU::ciRam[mirrorAddr] = v;
+    }
+
+    // Mirror $3000-$3FFF to $2000-$2FFF
+    if (addr >= 0x3000 && addr < 0x4000)
+        return chr_write(addr - 0x1000, v);
+
     return v;
 }
 

@@ -7,10 +7,12 @@
 #include "mappers/mapper2.hpp"
 #include "mappers/mapper3.hpp"
 #include "mappers/mapper4.hpp"
+#include "mappers/mapper5.hpp"
 #include "mappers/mapper7.hpp"
 #include "mappers/mapper9.hpp"
 #include "mappers/mapper10.hpp"
 #include "mappers/mapper11.hpp"
+#include "mappers/mapper24.hpp"
 #include "mappers/mapper34.hpp"
 #include "mappers/mapper66.hpp"
 #include "ppu.hpp"
@@ -83,10 +85,13 @@ void load(const char* fileName)
         case 2:  mapper = new Mapper2(rom); break;
         case 3:  mapper = new Mapper3(rom); break;
         case 4:  mapper = new Mapper4(rom); break;
+        case 5:  mapper = new Mapper5(rom); break;
         case 7:  mapper = new Mapper7(rom); break;
         case 9:  mapper = new Mapper9(rom); break;
         case 10: mapper = new Mapper10(rom); break;
         case 11: mapper = new Mapper11(rom); break;
+        case 24: mapper = new Mapper24(rom, false); break;  // VRC6a
+        case 26: mapper = new Mapper24(rom, true); break;   // VRC6b
         case 34: mapper = new Mapper34(rom); break;
         case 66: mapper = new Mapper66(rom); break;
         default:

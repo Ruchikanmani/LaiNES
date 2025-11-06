@@ -70,6 +70,13 @@ u8 Mapper4::chr_write(u16 addr, u8 v)
 
 void Mapper4::signal_scanline(int scanline)
 {
+    // MMC3 IRQ only counts when rendering is enabled (when A12 toggles)
+    if (!PPU::mask.bg && !PPU::mask.spr) return;
+
+    // MMC3 IRQ counts visible scanlines (0-239) and pre-render scanline (261)
+    // Skip post-render (240) and VBlank (241-260)
+    if (scanline >= 240 && scanline != 261) return;
+
     if (irqCounter == 0)
         irqCounter = irqPeriod;
     else
