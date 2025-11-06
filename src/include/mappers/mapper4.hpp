@@ -28,8 +28,8 @@ class Mapper4 : public Mapper
         apply();
     }
 
-    u8 write(u16 addr, u8 v);
-    u8 chr_write(u16 addr, u8 v);
+    u8 write(u16 addr, u8 v) override;
+    u8 chr_write(u16 addr, u8 v) override;
 
-    void signal_scanline();
+    void signal_scanline(int scanline) override;
 };

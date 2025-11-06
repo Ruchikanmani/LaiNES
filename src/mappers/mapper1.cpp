@@ -38,8 +38,10 @@ void Mapper1::apply()
     // Set mirroring:
     switch (regs[0] & 0b11)
     {
-        case 2:  set_mirroring(PPU::VERTICAL);   break;
-        case 3:  set_mirroring(PPU::HORIZONTAL); break;
+        case 0:  set_mirroring(PPU::ONE_SCREEN_LO); break;
+        case 1:  set_mirroring(PPU::ONE_SCREEN_HI); break;
+        case 2:  set_mirroring(PPU::VERTICAL);      break;
+        case 3:  set_mirroring(PPU::HORIZONTAL);    break;
     }
 }
 
@@ -78,5 +80,7 @@ u8 Mapper1::write(u16 addr, u8 v)
 
 u8 Mapper1::chr_write(u16 addr, u8 v)
 {
+    if (addr >= 0x2000)
+        return Mapper::chr_write(addr, v);
     return chr[addr] = v;
 }

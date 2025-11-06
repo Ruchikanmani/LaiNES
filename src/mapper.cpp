@@ -38,13 +38,25 @@ u8 Mapper::read(u16 addr)
 {
     if (addr >= 0x8000)
         return prg[prgMap[(addr - 0x8000) / 0x2000] + ((addr - 0x8000) % 0x2000)];
-    else
+    else if (addr >= 0x6000)
         return prgRam[addr - 0x6000];
+    return 0;  // Should not reach here for $5000-$5FFF (handled by CPU open bus logic)
 }
 
 u8 Mapper::chr_read(u16 addr)
 {
+    // Only handle pattern tables ($0000-$1FFF)
+    // Nametables are handled directly by PPU
     return chr[chrMap[addr / 0x400] + (addr % 0x400)];
+}
+
+u8 Mapper::chr_write(u16 addr, u8 v)
+{
+    // Only handle pattern tables ($0000-$1FFF)
+    // Nametables are handled directly by PPU
+    if (chrRam)
+        chr[chrMap[addr / 0x400] + (addr % 0x400)] = v;
+    return v;
 }
 
 /* PRG mapping functions */
