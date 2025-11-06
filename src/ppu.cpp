@@ -2,6 +2,7 @@
 #include "cpu.hpp"
 #include "gui.hpp"
 #include "ppu.hpp"
+#include <cstdio>
 
 namespace PPU {
 #include "palette.inc"
@@ -17,10 +18,13 @@ u32 pixels[256 * 240];     // Video buffer.
 Addr vAddr, tAddr;  // Loopy V, T.
 u8 fX;              // Fine X.
 u8 oamAddr;         // OAM address.
+u8 readBuffer;      // VRAM read buffer for $2007.
+u8 openBus;         // PPU I/O bus value for open bus behavior.
 
 Ctrl ctrl;      // PPUCTRL   ($2000) register.
 Mask mask;      // PPUMASK   ($2001) register.
 Status status;  // PPUSTATUS ($2002) register.
+bool vBlankSuppressed = false;  // VBlank suppression flag
 
 // Background latches:
 u8 nt, at, bgL, bgH;
@@ -32,6 +36,9 @@ bool atLatchL, atLatchH;
 int scanline, dot;
 bool frameOdd;
 
+// PPU warmup counter (PPU ignores certain writes for ~29658 CPU cycles after reset)
+static int warmupCycles;
+
 inline bool rendering() { return mask.bg || mask.spr; }
 inline int spr_height() { return ctrl.sprSz ? 16 : 8; }
 
@@ -42,6 +49,9 @@ u16 nt_mirror(u16 addr)
     {
         case VERTICAL:    return addr % 0x800;
         case HORIZONTAL:  return ((addr / 2) & 0x400) + (addr % 0x400);
+        case ONE_SCREEN_LO:
+        case ONE_SCREEN_HI:
+                          return (mirroring == ONE_SCREEN_HI) ? 0x400 + (addr & 0x3ff) : (addr & 0x3ff);
         default:          return addr - 0x2000;
     }
 }
@@ -57,7 +67,7 @@ u8 rd(u16 addr)
         case 0x3F00 ... 0x3FFF:  // Palettes:
             if ((addr & 0x13) == 0x10) addr &= ~0x10;
             return cgRam[addr & 0x1F] & (mask.gray ? 0x30 : 0xFF);
-        default: return 0;
+        default: return addr & 0xFF;  // Open bus on video memory bus returns low byte of address
     }
 }
 void wr(u16 addr, u8 v)
@@ -72,55 +82,133 @@ void wr(u16 addr, u8 v)
     }
 }
 
+static bool latch;  // Detect second reading (moved out for reset access)
+
 /* Access PPU through registers. */
-template <bool write> u8 access(u16 index, u8 v)
+template <bool write> u8 access(u16 index, u8 v, bool rmw)
 {
-    static u8 res;      // Result of the operation.
-    static u8 buffer;   // VRAM read buffer.
-    static bool latch;  // Detect second reading.
+    // v parameter contains the current data bus value
+    
 
     /* Write into register */
     if (write)
     {
-        res = v;
-
+        openBus = v;  // All writes update PPU open bus
+        Cartridge::ppu_write_hook(index, v);  // Let mapper spy on PPU register writes
         switch (index)
         {
-            case 0:  ctrl.r = v; tAddr.nt = ctrl.nt; break;       // PPUCTRL   ($2000).
-            case 1:  mask.r = v; break;                           // PPUMASK   ($2001).
+            case 0:  // PPUCTRL   ($2000).
+                if (warmupCycles <= 0) {
+                    ctrl.r = v;
+                    tAddr.nt = ctrl.nt;
+                    // Always update NMI line to reflect ctrl.nmi && status.vBlank
+                    CPU::set_nmi(ctrl.nmi && status.vBlank);
+                }
+                break;
+            case 1:  // PPUMASK   ($2001).
+                if (warmupCycles <= 0) { mask.r = v; }
+                break;
+            case 2:  // PPUSTATUS is read-only, write does nothing but update open bus
+                break;
             case 3:  oamAddr = v; break;                          // OAMADDR   ($2003).
             case 4:  oamMem[oamAddr++] = v; break;                // OAMDATA   ($2004).
             case 5:                                               // PPUSCROLL ($2005).
-                if (!latch) { fX = v & 7; tAddr.cX = v >> 3; }      // First write.
-                else  { tAddr.fY = v & 7; tAddr.cY = v >> 3; }      // Second write.
-                latch = !latch; break;
+                if (warmupCycles <= 0) {
+                    if (!latch) { fX = v & 7; tAddr.cX = v >> 3; }      // First write.
+                    else  { tAddr.fY = v & 7; tAddr.cY = v >> 3; }      // Second write.
+                    latch = !latch;
+                }
+                break;
             case 6:                                               // PPUADDR   ($2006).
-                if (!latch) { tAddr.h = v & 0x3F; }                 // First write.
-                else        { tAddr.l = v; vAddr.r = tAddr.r; }     // Second write.
-                latch = !latch; break;
-            case 7:  wr(vAddr.addr, v); vAddr.addr += ctrl.incr ? 32 : 1;  // PPUDATA ($2007).
+                if (warmupCycles <= 0) {
+                    if (!latch) {
+                        // First write: set high 6 bits (bits 8-13 of address), clear bit 14
+                        tAddr.r = (tAddr.r & 0x00FF) | ((v & 0x3F) << 8);
+                    }                 // First write.
+                    else {
+                        // Second write: set low 8 bits (bits 0-7 of address)
+                        tAddr.r = (tAddr.r & 0x3F00) | v;
+                        vAddr.r = tAddr.r;
+                    }     // Second write.
+                    latch = !latch;
+                }
+                break;
+            case 7:  // PPUDATA ($2007).
+                if (warmupCycles <= 0) {
+                    // For RMW instructions, perform an extra write
+                    if (rmw && write) {
+                        // Extra glitched write at (v & 0xFF00) | buffer
+                        // The buffer contains the incremented/decremented value
+                        u16 glitchAddr = (vAddr.addr & 0xFF00) | v;
+                        wr(glitchAddr, v);
+                    }
+                    wr(vAddr.addr, v);
+                    vAddr.addr += ctrl.incr ? 32 : 1;
+                }
+                break;
         }
+        return v;  // Writes return the value written
     }
     /* Read from register */
     else
         switch (index)
         {
+            case 0:  // PPUCTRL is write-only, return PPU open bus
+                v = openBus;
+                break;
+            case 1:  // PPUMASK is write-only, return PPU open bus
+                v = openBus;
+                break;
             // PPUSTATUS ($2002):
-            case 2:  res = (res & 0x1F) | status.r; status.vBlank = 0; latch = 0; break;
-            case 4:  res = oamMem[oamAddr]; break;  // OAMDATA ($2004).
-            case 7:                                 // PPUDATA ($2007).
+            case 2:
+                v = (openBus & 0x1F) | status.r;  // Bits 4-0 from open bus, 7-5 from status
+                openBus = v;  // Reading $2002 updates open bus
+                // Check if we're reading $2002 on the exact cycle VBlank would be set
+                // VBlank is set at scanline 241, dot 1
+                // With mid-cycle timing: after 2 PPU steps, dot has been incremented to 2
+                // So we check for dot 0, 1, or 2 depending on CPU/PPU alignment
+                if (scanline == 241 && (dot <= 2)) {
+                    // Reading during dots 0-2 can suppress VBlank depending on exact timing
+                    // For mid-cycle timing (ppu_sub_cycle==2), dot==2 means VBlank just set
+                    vBlankSuppressed = true;  // Suppress VBlank flag setting (race condition)
+                }
+                status.vBlank = 0; latch = 0;
+                // Update NMI line: VBlank cleared, so line = ctrl.nmi && false = false
+                CPU::set_nmi(ctrl.nmi && status.vBlank);
+                break;
+            case 3:  // OAMADDR is write-only, return PPU open bus
+                v = openBus;
+                break;
+            case 4:
+                v = oamMem[oamAddr];
+                openBus = v;  // Reading $2004 updates open bus
+                break;  // OAMDATA ($2004).
+            case 5:  // PPUSCROLL is write-only, return PPU open bus
+                v = openBus;
+                break;
+            case 6:  // PPUADDR is write-only, return PPU open bus
+                v = openBus;
+                break;
+            case 7:                                     // PPUDATA ($2007).
                 if (vAddr.addr <= 0x3EFF)
                 {
-                    res = buffer;
-                    buffer = rd(vAddr.addr);
+                    v = readBuffer;
+                    readBuffer = rd(vAddr.addr);
                 }
                 else
-                    res = buffer = rd(vAddr.addr);
-                vAddr.addr += ctrl.incr ? 32 : 1;
+                    v = readBuffer = rd(vAddr.addr);
+                openBus = v;  // Reading $2007 updates open bus
+                vAddr.addr += ctrl.incr ? 32 : 1; break;
+            // Invalid registers return open bus
+            default:
+                v = openBus;
+                break;
         }
-    return res;
+
+
+    return v;
 }
-template u8 access<0>(u16, u8); template u8 access<1>(u16, u8);
+template u8 access<0>(u16, u8, bool); template u8 access<1>(u16, u8, bool);
 
 /* Calculate graphics addresses */
 inline u16 nt_addr() { return 0x2000 | (vAddr.r & 0xFFF); }
@@ -172,22 +260,60 @@ void clear_oam()
 void eval_sprites()
 {
     int n = 0;
+    int m = 0;  // Sub-index for buggy overflow evaluation
+    bool overflow_bug_active = false;
+    int overflow_start_sprite = 0;
+
     for (int i = 0; i < 64; i++)
     {
-        int line = (scanline == 261 ? -1 : scanline) - oamMem[i*4 + 0];
-        // If the sprite is in the scanline, copy its properties into secondary OAM:
-        if (line >= 0 and line < spr_height())
+        if (!overflow_bug_active)
         {
-            secOam[n].id   = i;
-            secOam[n].y    = oamMem[i*4 + 0];
-            secOam[n].tile = oamMem[i*4 + 1];
-            secOam[n].attr = oamMem[i*4 + 2];
-            secOam[n].x    = oamMem[i*4 + 3];
+            int line = (scanline == 261 ? -1 : scanline) - oamMem[i*4 + 0];
+            // If the sprite is in the scanline, copy its properties into secondary OAM:
+            if (line >= 0 and line < spr_height())
+            {
+                if (n < 8)
+                {
+                    secOam[n].id   = i;
+                    secOam[n].y    = oamMem[i*4 + 0];
+                    secOam[n].tile = oamMem[i*4 + 1];
+                    secOam[n].attr = oamMem[i*4 + 2];
+                    secOam[n].x    = oamMem[i*4 + 3];
+                    n++;
+                }
+                else
+                {
+                    // Found 9th sprite - set overflow flag and start buggy evaluation
+                    status.sprOvf = true;
+                    overflow_bug_active = true;
+                    overflow_start_sprite = i;
+                    m = 0;  // Start with Y coordinate check
+                }
+            }
+        }
+        else
+        {
+            // Buggy sprite overflow evaluation
+            // The hardware bug: PPU continues checking but uses incorrect addressing
+            int addr = (i * 4 + m) & 0xFF;
+            int line = (scanline == 261 ? -1 : scanline) - oamMem[addr];
 
-            if (++n >= 8)
+            if (line >= 0 && line < spr_height())
             {
                 status.sprOvf = true;
-                break;
+                m = (m + 1) & 3;  // Increment byte index (wraps 0-3)
+                // In real hardware, both sprite and byte indices increment incorrectly
+            }
+            else
+            {
+                // Incorrectly increment both indices when sprite not in range
+                m = (m + 1) & 3;
+                // The PPU increments sprite index when m wraps to 0
+                if (m == 0)
+                {
+                    // Hardware increments sprite index here
+                    // But due to the bug, it might skip sprites
+                }
             }
         }
     }
@@ -247,7 +373,13 @@ void pixel()
                                  NTH_BIT(oam[i].dataL, 7 - sprX);
                 if (sprPalette == 0) continue;  // Transparent pixel.
 
-                if (oam[i].id == 0 && palette && x != 255) status.sprHit = true;
+                // Check for sprite 0 hit
+                if (oam[i].id == 0 && palette && x != 255) {
+                    // Don't set sprite 0 hit if sprites or BG are masked at x < 8
+                    if (x >= 8 || (mask.sprLeft && mask.bgLeft)) {
+                        status.sprHit = true;
+                    }
+                }
                 sprPalette |= (oam[i].attr & 3) << 2;
                 objPalette  = sprPalette + 16;
                 objPriority = oam[i].attr & 0x20;
@@ -255,7 +387,15 @@ void pixel()
         // Evaluate priority:
         if (objPalette && (palette == 0 || objPriority == 0)) palette = objPalette;
 
-        pixels[scanline*256 + x] = nesRgb[rd(0x3F00 + (rendering() ? palette : 0))];
+        // Apply emphasis bits from mask register (bits 5-7)
+        u8 emphasis = (mask.red << 0) | (mask.green << 1) | (mask.blue << 2);
+        if (emphasis == 0) {
+            // No emphasis - use base palette directly for compatibility
+            pixels[scanline*256 + x] = basePalette[rd(0x3F00 + (rendering() ? palette : 0))];
+        } else {
+            // Use precomputed emphasis palette
+            pixels[scanline*256 + x] = nesRgb[emphasis][rd(0x3F00 + (rendering() ? palette : 0))];
+        }
     }
     // Perform background shifts:
     bgShiftL <<= 1; bgShiftH <<= 1;
@@ -268,7 +408,14 @@ template<Scanline s> void scanline_cycle()
 {
     static u16 addr;
 
-    if (s == NMI and dot == 1) { status.vBlank = true; if (ctrl.nmi) CPU::set_nmi(); }
+    if (s == NMI and dot == 1) {
+        if (!vBlankSuppressed) {
+            status.vBlank = true;
+            // Update NMI line to reflect ctrl.nmi && status.vBlank
+            CPU::set_nmi(ctrl.nmi && status.vBlank);
+        }
+        vBlankSuppressed = false;  // Clear suppression flag after the critical cycle
+    }
     else if (s == POST and dot == 0) GUI::new_frame(pixels);
     else if (s == VISIBLE or s == PRE)
     {
@@ -276,8 +423,8 @@ template<Scanline s> void scanline_cycle()
         switch (dot)
         {
             case   1: clear_oam(); if (s == PRE) { status.sprOvf = status.sprHit = false; } break;
-            case 257: eval_sprites(); break;
-            case 321: load_sprites(); break;
+            case 257: if (rendering()) eval_sprites(); break;
+            case 321: if (rendering()) load_sprites(); break;
         }
         // Background:
         switch (dot)
@@ -305,20 +452,33 @@ template<Scanline s> void scanline_cycle()
             case 280 ... 304:  if (s == PRE)            v_update(); break;  // Update vertical position.
 
             // No shift reloading:
-            case             1:  addr = nt_addr(); if (s == PRE) status.vBlank = false; break;
+            case             1:  addr = nt_addr();
+                                 if (s == PRE) {
+                                     status.vBlank = false;
+                                     // Update NMI line: VBlank cleared, so line = ctrl.nmi && false = false
+                                     CPU::set_nmi(ctrl.nmi && status.vBlank);
+                                 }
+                                 break;
             case 321: case 339:  addr = nt_addr(); break;
             // Nametable fetch instead of attribute:
             case           338:  nt = rd(addr); break;
             case           340:  nt = rd(addr); if (s == PRE && rendering() && frameOdd) dot++;
         }
-        // Signal scanline to mapper:
-        if (dot == 260 && rendering()) Cartridge::signal_scanline();
     }
 }
 
 /* Execute a PPU cycle. */
 void step()
 {
+    // Decrement warmup counter (PPU step is called 3 times per CPU cycle)
+    static int ppuStepCounter = 0;
+    if (warmupCycles > 0) {
+        if (++ppuStepCounter >= 3) {
+            ppuStepCounter = 0;
+            warmupCycles--;
+        }
+    }
+
     switch (scanline)
     {
         case 0 ... 239:  scanline_cycle<VISIBLE>(); break;
@@ -326,6 +486,10 @@ void step()
         case       241:  scanline_cycle<NMI>();     break;
         case       261:  scanline_cycle<PRE>();     break;
     }
+
+    // Signal scanline to mapper at dot 260 (after sprite fetches, when A12 toggles for MMC3)
+    if (dot == 260) Cartridge::signal_scanline(scanline);
+
     // Update dot and scanline counters:
     if (++dot > 340)
     {
@@ -343,10 +507,36 @@ void reset()
     frameOdd = false;
     scanline = dot = 0;
     ctrl.r = mask.r = status.r = 0;
+    latch = 0;  // Reset the write latch
+    readBuffer = 0;
+    warmupCycles = 29658;  // PPU warmup period in CPU cycles
 
     memset(pixels, 0x00, sizeof(pixels));
     memset(ciRam,  0xFF, sizeof(ciRam));
     memset(oamMem, 0x00, sizeof(oamMem));
+
+    // Precompute all emphasis combinations
+    for (int emp = 0; emp < 8; emp++) {
+        for (int i = 0; i < 64; i++) {
+            u32 col = basePalette[i];
+            
+            if (emp == 0) {
+                // No emphasis - use original colors exactly
+                nesRgb[emp][i] = col;
+            } else {
+                // Apply emphasis: attenuate non-emphasized channels
+                u8 r = (col >> 16) & 0xFF;
+                u8 g = (col >> 8) & 0xFF;
+                u8 b = col & 0xFF;
+                
+                if (!(emp & 1)) r = r * 3 / 4;  // If red not emphasized, attenuate it
+                if (!(emp & 2)) g = g * 3 / 4;  // If green not emphasized, attenuate it  
+                if (!(emp & 4)) b = b * 3 / 4;  // If blue not emphasized, attenuate it
+                
+                nesRgb[emp][i] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
 }
 
 

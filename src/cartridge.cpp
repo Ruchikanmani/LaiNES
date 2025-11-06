@@ -25,13 +25,15 @@ template u8 access<0>(u16, u8); template u8 access<1>(u16, u8);
 /* CHR-ROM/RAM access */
 template <bool wr> u8 chr_access(u16 addr, u8 v)
 {
+    if (!mapper) return 0;  // Safety: return 0 if no cartridge loaded
     if (!wr) return mapper->chr_read(addr);
     else     return mapper->chr_write(addr, v);
 }
 template u8 chr_access<0>(u16, u8); template u8 chr_access<1>(u16, u8);
 
-void signal_scanline()
+void signal_scanline(int scanline)
 {
+    (void)scanline;  // Scanline parameter will be used in mapper PRs
     mapper->signal_scanline();
 }
 
@@ -66,14 +68,50 @@ void load(const char* fileName)
             return;
     }
 
-    CPU::power();
-    PPU::reset();
+    PPU::reset();  // Reset PPU first so it's ready when CPU::power() ticks
     APU::reset();
+    CPU::power();  // power() calls INT<RESET>() which ticks the PPU
 }
 
 bool loaded()
 {
     return mapper != nullptr;
+}
+
+// Stub: Mapper IRQ checking - will be implemented in mapper PRs
+bool check_mapper_irq(int elapsed)
+{
+    (void)elapsed;
+    return false;  // No mapper IRQ support yet
+}
+
+// Stub: Expansion address handling - will be implemented in mapper PRs
+bool handles_expansion_addr(u16 addr)
+{
+    (void)addr;
+    return false;  // No expansion address support yet
+}
+
+// Stub: Mapper audio - will be implemented in mapper PRs
+void run_mapper_audio(int elapsed)
+{
+    (void)elapsed;
+    // No mapper audio yet
+}
+
+// Stub: Mapper audio frame end - will be implemented in mapper PRs
+void end_mapper_audio_frame(int elapsed)
+{
+    (void)elapsed;
+    // No mapper audio yet
+}
+
+// Stub: PPU write hook - will be implemented in mapper PRs
+void ppu_write_hook(u16 addr, u8 v)
+{
+    (void)addr;
+    (void)v;
+    // No PPU write observation yet
 }
 
 
