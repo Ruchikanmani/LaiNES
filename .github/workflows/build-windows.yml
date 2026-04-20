@@ -1,0 +1,147 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: laines-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-scons
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-SDL2_image
+            mingw-w64-x86_64-SDL2_ttf
+
+      - name: Apply CI-only Windows compatibility patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path_str, old, new):
+              path = Path(path_str)
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'pattern not found in {path_str}')
+              path.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+
+          Path('SConstruct').write_text('''from os import environ
+          import sys
+
+          tools = ['default']
+          cxx = 'clang++'
+          if sys.platform == 'win32':
+              tools = ['mingw']
+              cxx = 'g++'
+
+          DefaultEnvironment(tools=tools)
+
+          VariantDir('build/src', 'src', duplicate=0)
+          VariantDir('build/lib', 'lib', duplicate=0)
+          flags = ['-O3', '-march=native', '-std=c++14']
+          linkflags = list(flags)
+          if sys.platform == 'win32':
+              linkflags.append('-mconsole')
+
+          env = Environment(tools     = tools,
+                            ENV       = environ,
+                            CXX       = cxx,
+                            LINK      = cxx,
+                            CPPFLAGS  = ['-Wno-unused-value'],
+                            CXXFLAGS  = flags,
+                            LINKFLAGS = linkflags,
+                            CPPPATH   = ['#simpleini', '#lib/include', '#src/include'],
+                            LIBS      = ['SDL2', 'SDL2_image', 'SDL2_ttf'])
+
+          env.Program('laines', Glob('build/*/*.cpp') + Glob('build/*/*/*.cpp'))
+          ''', encoding='utf-8', newline='\n')
+
+          replace(
+              'src/config.cpp',
+              '#include <cstdlib>\n#include <SimpleIni.h>\n#include "config.hpp"\n#include "gui.hpp"\n\nnamespace GUI {\n',
+              '#include <cstdlib>\n#ifdef _WIN32\n#include <direct.h>\n#endif\n#include <SimpleIni.h>\n#include "config.hpp"\n#include "gui.hpp"\n\nnamespace {\n\nint create_dir(const char* path)\n{\n#ifdef _WIN32\n    return _mkdir(path);\n#else\n    return mkdir(path, CONFIG_DIR_DEFAULT_MODE);\n#endif\n}\n\n}\n\nnamespace GUI {\n'
+          )
+          replace('src/config.cpp', '    int res = mkdir(homepath, CONFIG_DIR_DEFAULT_MODE);\n', '    int res = create_dir(homepath);\n')
+          replace('src/config.cpp', '    res = mkdir(path, CONFIG_DIR_DEFAULT_MODE);\n', '    res = create_dir(path);\n')
+
+          replace(
+              'src/main.cpp',
+              '#include "gui.hpp"\n#include "config.hpp"\n\nint main(int argc, char *argv[])\n{\n    GUI::load_settings();\n    GUI::init();\n    GUI::run();\n\n    return 0;\n}\n',
+              '#define SDL_MAIN_HANDLED\n#include "gui.hpp"\n#include "config.hpp"\n\nint main(int argc, char *argv[])\n{\n    SDL_SetMainReady();\n    GUI::load_settings();\n    GUI::init();\n    GUI::run();\n\n    return 0;\n}\n'
+          )
+
+          replace('src/menu.cpp', '#include <dirent.h>\n#include <unistd.h>\n', '#include <dirent.h>\n#include <sys/stat.h>\n#include <unistd.h>\n')
+          replace(
+              'src/menu.cpp',
+              '        if (dirp->d_type == DT_DIR)\n            add(new Entry(name + "/",\n                          [=]{ change_dir(path); }));\n\n        else if (name.size() > 4 and name.substr(name.size() - 4) == ".nes")\n',
+              '        struct stat st;\n        bool is_dir = stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);\n\n        if (is_dir)\n            add(new Entry(name + "/",\n                          [=]{ change_dir(path); }));\n\n        else if (name.size() > 4 and name.substr(name.size() - 4) == ".nes")\n'
+          )
+          PY
+
+      - name: Build
+        run: scons -j"$(nproc)"
+
+      - name: Stage portable bundle
+        run: |
+          rm -rf dist
+          mkdir -p dist/LaiNES-windows-x86_64
+          install -m 755 laines.exe dist/LaiNES-windows-x86_64/laines.exe
+          cp -r res dist/LaiNES-windows-x86_64/
+          cp README.md LICENSE dist/LaiNES-windows-x86_64/
+          python - <<'PY'
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          dst = Path('dist/LaiNES-windows-x86_64')
+          seen = set()
+          out = subprocess.check_output(['ldd', 'laines.exe'], text=True, errors='ignore')
+          for line in out.splitlines():
+              match = re.search(r'=>\s+(\S+)\s+\(', line)
+              if not match:
+                  continue
+              dep = match.group(1)
+              if not dep.startswith('/mingw64/bin/'):
+                  continue
+              name = os.path.basename(dep)
+              key = name.lower()
+              if key in seen:
+                  continue
+              shutil.copy2(dep, dst / name)
+              seen.add(key)
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaiNES-windows-x86_64
+          path: dist/LaiNES-windows-x86_64/
+          if-no-files-found: error
