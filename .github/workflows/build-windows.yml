@@ -34,6 +34,7 @@ jobs:
           install: >-
             git
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
             mingw-w64-x86_64-scons
             mingw-w64-x86_64-SDL2
             mingw-w64-x86_64-SDL2_image
@@ -43,6 +44,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           def replace(path_str, old, new):
               path = Path(path_str)
@@ -51,7 +53,8 @@ jobs:
                   raise SystemExit(f'pattern not found in {path_str}')
               path.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
 
-          Path('SConstruct').write_text('''from os import environ
+          Path('SConstruct').write_text(dedent('''\
+          from os import environ
           import sys
 
           tools = ['default']
@@ -80,7 +83,7 @@ jobs:
                             LIBS      = ['SDL2', 'SDL2_image', 'SDL2_ttf'])
 
           env.Program('laines', Glob('build/*/*.cpp') + Glob('build/*/*/*.cpp'))
-          ''', encoding='utf-8', newline='\n')
+          '''), encoding='utf-8', newline='\n')
 
           replace(
               'src/config.cpp',
