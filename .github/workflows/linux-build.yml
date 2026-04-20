@@ -1,0 +1,55 @@
+name: build-linux
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: laines-linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            scons \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-ttf-dev
+
+      - name: Build
+        run: scons -j"$(nproc)"
+
+      - name: Stage artifact
+        run: |
+          rm -rf dist
+          mkdir -p dist/LaiNES-linux-x86_64
+          install -m 755 laines dist/LaiNES-linux-x86_64/laines
+          cp -r res dist/LaiNES-linux-x86_64/
+          cp README.md LICENSE dist/LaiNES-linux-x86_64/
+
+      - name: Create tarball
+        run: |
+          tar -C dist -czf dist/LaiNES-linux-x86_64.tar.gz LaiNES-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LaiNES-linux-x86_64
+          path: dist/LaiNES-linux-x86_64.tar.gz
+          if-no-files-found: error
