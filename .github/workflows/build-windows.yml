@@ -119,11 +119,13 @@ jobs:
           cp -r res dist/LaiNES-windows-x86_64/
           cp README.md LICENSE dist/LaiNES-windows-x86_64/
 
+          ldd_re='=>[[:space:]]+(/[^[:space:]]+)[[:space:]]+\('
           copy_mingw_deps() {
             local target="$1"
+            local line dep
             while IFS= read -r line; do
-              if [[ "$line" =~ =>[[:space:]]+(/[^[:space:]]+)[[:space:]]+\( ]]; then
-                local dep="${BASH_REMATCH[1]}"
+              if [[ "$line" =~ $ldd_re ]]; then
+                dep="${BASH_REMATCH[1]}"
                 case "$dep" in
                   /mingw64/bin/*)
                     cp -f "$dep" dist/LaiNES-windows-x86_64/
